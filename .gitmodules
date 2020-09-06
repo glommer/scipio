@@ -1,0 +1,6 @@
+[submodule "scipio/liburing"]
+	path = scipio/liburing
+	url = https://github.com/glommer/liburing
+[submodule "liburing"]
+	path = liburing
+	url = https://github.com/glommer/liburing
