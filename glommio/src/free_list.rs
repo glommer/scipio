@@ -6,6 +6,7 @@
 use std::marker::PhantomData;
 use std::mem;
 use std::ops;
+use std::fmt;
 
 #[derive(Debug)]
 pub(crate) struct Idx<T> {
@@ -13,21 +14,21 @@ pub(crate) struct Idx<T> {
     _ty: PhantomData<fn() -> T>,
 }
 
-impl<T> Copy for Idx<T> {}
-impl<T> Clone for Idx<T> {
+impl<T: fmt::Debug> Copy for Idx<T> {}
+impl<T: fmt::Debug> Clone for Idx<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> PartialEq for Idx<T> {
+impl<T: fmt::Debug> PartialEq for Idx<T> {
     fn eq(&self, other: &Idx<T>) -> bool {
         self.raw == other.raw
     }
 }
-impl<T> Eq for Idx<T> {}
+impl<T: fmt::Debug> Eq for Idx<T> {}
 
-impl<T> Idx<T> {
+impl<T: fmt::Debug> Idx<T> {
     pub(crate) fn from_raw(raw: usize) -> Idx<T> {
         Idx {
             raw,
@@ -40,12 +41,12 @@ impl<T> Idx<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct FreeList<T> {
+pub(crate) struct FreeList<T: fmt::Debug> {
     first_free: Option<Idx<T>>,
     slots: Vec<Slot<T>>,
 }
 
-impl<T> Default for FreeList<T> {
+impl<T: fmt::Debug> Default for FreeList<T> {
     fn default() -> Self {
         FreeList {
             first_free: None,
@@ -54,14 +55,16 @@ impl<T> Default for FreeList<T> {
     }
 }
 
-impl<T> FreeList<T> {
+impl<T: fmt::Debug> FreeList<T> {
     pub(crate) fn alloc(&mut self, item: T) -> Idx<T> {
         let slot = Slot::Full { item };
         match self.first_free {
             Some(idx) => {
                 self.first_free = match mem::replace(&mut self.slots[idx.to_raw()], slot) {
                     Slot::Free { next_free } => next_free,
-                    Slot::Full { .. } => unreachable!(),
+                    Slot::Full { .. } => {
+                        panic!("id {:?} was full already. First free: {:?} Status: {:?}", idx,  self.first_free, self.slots);
+                    }
                 };
                 idx
             }
@@ -78,12 +81,14 @@ impl<T> FreeList<T> {
         };
         match mem::replace(&mut self.slots[idx.to_raw()], slot) {
             Slot::Full { item } => item,
-            Slot::Free { .. } => unreachable!(),
+            Slot::Free { .. } => {
+                panic!("id {:?} was empty already, First free {:?}, Status: {:?}", idx,  self.first_free, self.slots);
+            }
         }
     }
 }
 
-impl<T> ops::Index<Idx<T>> for FreeList<T> {
+impl<T: fmt::Debug> ops::Index<Idx<T>> for FreeList<T> {
     type Output = T;
 
     fn index(&self, idx: Idx<T>) -> &T {
@@ -94,7 +99,7 @@ impl<T> ops::Index<Idx<T>> for FreeList<T> {
     }
 }
 
-impl<T> ops::IndexMut<Idx<T>> for FreeList<T> {
+impl<T: fmt::Debug> ops::IndexMut<Idx<T>> for FreeList<T> {
     fn index_mut(&mut self, idx: Idx<T>) -> &mut T {
         match &mut self.slots[idx.to_raw()] {
             Slot::Free { .. } => unreachable!(),
@@ -104,7 +109,7 @@ impl<T> ops::IndexMut<Idx<T>> for FreeList<T> {
 }
 
 #[derive(Debug)]
-enum Slot<T> {
+enum Slot<T: fmt::Debug> {
     Free { next_free: Option<Idx<T>> },
     Full { item: T },
 }
