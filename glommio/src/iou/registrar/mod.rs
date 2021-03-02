@@ -7,7 +7,7 @@
 //! When file descriptors and buffers are registered with the kernel, an iterator of the type-safe
 //! [`Registered`] wrapper is returned. This wrapper makes it easier to correctly use
 //! pre-registered resources. By passing a [`RegisteredFd`] or the correct type of registered
-//! buffer to an [`SQE`][crate::SQE]'s prep methods, the SQE will be properly prepared to use the
+//! buffer to an `SQE`s prep methods, the SQE will be properly prepared to use the
 //! pre-registered object.
 mod registered;
 
