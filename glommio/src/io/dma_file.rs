@@ -8,6 +8,7 @@ use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
 use crate::sys::sysfs;
 use crate::sys::{DirectIO, DmaBuffer, PollableStatus};
+use log::debug;
 use nix::sys::statfs::*;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -100,7 +101,9 @@ impl DmaFile {
         mode: libc::mode_t,
     ) -> io::Result<DmaFile> {
         let mut pollable = PollableStatus::Pollable;
+        debug!("==>GLOMMIO open at start");
         let res = GlommioFile::open_at(dir, path, flags, mode).await;
+        debug!("==>GLOMMIO open at return : {:?}", res);
 
         let file = match res {
             Err(os_err) => {
@@ -113,7 +116,11 @@ impl DmaFile {
                     let fstype = buf.filesystem_type();
                     if fstype == TMPFS_MAGIC {
                         pollable = PollableStatus::NonPollable(DirectIO::Disabled);
-                        GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                        debug!("==>GLOMMIO openat tmpfs");
+                        let k =
+                            GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await;
+                        debug!("==>GLOMMIO openat tmpfs return {:?}", k);
+                        k
                     } else {
                         Err(os_err)
                     }
@@ -129,6 +136,7 @@ impl DmaFile {
         if file.dev_major == 0
             || sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _)
         {
+            debug!("==>GLOMMIO ADJUST POLLABLE");
             pollable = PollableStatus::NonPollable(DirectIO::Enabled);
         }
 
