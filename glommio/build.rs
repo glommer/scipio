@@ -11,6 +11,12 @@ fn main() {
         .unwrap();
     let liburing = project.join("liburing");
 
+    Command::new("git")
+        .arg("submodule")
+        .arg("update")
+        .arg("--init")
+        .status()
+        .unwrap();
     // Run the configure script in OUT_DIR to get `compat.h`
     let configured_include = configure(&liburing);
 
