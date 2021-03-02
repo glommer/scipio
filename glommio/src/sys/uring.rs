@@ -407,6 +407,11 @@ where
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
         sqe.set_user_data(user_data);
+
+        let id = MYID.with(|x| x.get());
+        if id > 0 {
+            println!("fill sqe: {:?}", op);
+        }
     }
 }
 
@@ -425,6 +430,10 @@ where
         }
 
         let src = consume_source(from_user_data(value.user_data()));
+        let id = MYID.with(|x| x.get());
+        if id > 0 {
+            println!("Returned : {:?}, {:?}", value, src);
+        }
 
         let result = value.result();
         let was_cancelled =
@@ -452,6 +461,7 @@ fn to_user_data(id: SourceId) -> u64 {
 }
 
 thread_local!(static SOURCE_MAP: RefCell<SourceMap> = Default::default());
+thread_local!(static MYID: Cell<u64> = Cell::new(0));
 
 fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
@@ -1017,6 +1027,11 @@ impl Reactor {
                 ),
             ));
         }
+
+        MYID.with(|x| {
+            let k = x.get();
+            x.set(k + 1);
+        });
 
         // always have at least some small amount of memory for the slab
         io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
