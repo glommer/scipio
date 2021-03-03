@@ -34,6 +34,8 @@ use nix::sys::socket::{MsgFlags, SockAddr, SockFlag};
 use nix::sys::stat::Mode as OpenMode;
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
@@ -462,6 +464,7 @@ fn to_user_data(id: SourceId) -> u64 {
 
 thread_local!(static SOURCE_MAP: RefCell<SourceMap> = Default::default());
 thread_local!(static MYID: Cell<u64> = Cell::new(0));
+static IDGEN: AtomicU64 = AtomicU64::new(0);
 
 fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
@@ -1029,8 +1032,7 @@ impl Reactor {
         }
 
         MYID.with(|x| {
-            let k = x.get();
-            x.set(k + 1);
+            x.set(IDGEN.fetch_add(1, Ordering::Relaxed));
         });
 
         // always have at least some small amount of memory for the slab
