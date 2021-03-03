@@ -1415,7 +1415,7 @@ impl Reactor {
     fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
         let ring = match source.latency_req() {
             Latency::NotImportant => &self.main_ring,
-            Latency::Matters(_) => &self.latency_ring,
+            Latency::Matters(_) => &self.main_ring,
         };
         queue_request_into_ring(ring, source, op)
     }
