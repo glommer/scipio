@@ -410,9 +410,9 @@ where
         }
         sqe.set_user_data(user_data);
 
-        let id = MYID.with(|x| x.get());
-        if id > 0 {
-            debug!("id {} fill sqe: {:?}", id, op);
+        match op.args {
+            UringOpDescriptor::Open(_, _, _) => debug!("fill sqe: {:?}", op),
+            _ => {}
         }
     }
 }
@@ -432,19 +432,35 @@ where
         }
 
         let src = consume_source(from_user_data(value.user_data()));
-        let id = MYID.with(|x| x.get());
-        if id > 0 {
-            debug!("id {} Returned : {:?}, {:?}", id, value, src);
-        }
+        let should_debug = {
+            let k = src.source_type.borrow();
+            match *k {
+                SourceType::Open(_) => {
+                    debug!("Returned : {:?}, {:?}", value, src);
+                    true
+                }
+                _ => false,
+            }
+        };
 
         let result = value.result();
         let was_cancelled =
             matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
 
+        if should_debug {
+            debug!("result {:?} was cancelled? {}", result, was_cancelled);
+        }
         if !was_cancelled && try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(result.map(|x| x as usize));
+
+            if should_debug {
+                debug!("Wakers now : {:?}", w);
+            }
             if let Some(waiter) = w.waiter.take() {
+                if should_debug {
+                    debug!("push waiter : {:?}", w);
+                }
                 wakers.push(waiter);
             }
         }
