@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use alloc::alloc::Layout;
-use log::warn;
+use log::{debug, warn};
 use nix::fcntl::{FallocateFlags, OFlag};
 use nix::poll::PollFlags;
 use rlimit::Resource;
@@ -412,7 +412,7 @@ where
 
         let id = MYID.with(|x| x.get());
         if id > 0 {
-            println!("fill sqe: {:?}", op);
+            debug!("id {} fill sqe: {:?}", id, op);
         }
     }
 }
@@ -434,7 +434,7 @@ where
         let src = consume_source(from_user_data(value.user_data()));
         let id = MYID.with(|x| x.get());
         if id > 0 {
-            println!("Returned : {:?}, {:?}", value, src);
+            debug!("id {} Returned : {:?}, {:?}", id, value, src);
         }
 
         let result = value.result();
