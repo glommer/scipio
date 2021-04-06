@@ -39,7 +39,7 @@ membarrier = "0.2.2"
 [dev-dependencies]
 futures = "0.3.5"
 fastrand = "1.4.0"
-tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time"] }
+tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 
 [build-dependencies]
 cc = "1.0.47"
@@ -86,4 +86,8 @@ required-features = ["bench"]
 
 [[bench]]
 name = "sharding"
+harness = false
+
+[[bench]]
+name = "spsc_vs_mpsc"
 harness = false
