@@ -13,8 +13,6 @@ fn main() {
     let nr_producers = 3;
     let msg_per_producer = 10_000_000;
 
-    test_spsc_glommio_to_glommio(nr_producers, msg_per_producer);
-    test_mpsc_tokio_to_tokio(nr_producers, msg_per_producer);
     test_mpsc_tokio_to_glommio(nr_producers, msg_per_producer);
 }
 

@@ -12,6 +12,7 @@ use core::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
+use backtrace::Backtrace;
 use std::sync::atomic::{AtomicI16, Ordering};
 
 use crate::sys;
@@ -285,6 +286,9 @@ where
     #[track_caller]
     fn increment_references(header: &mut Header) {
         let refs = header.references.fetch_add(1, Ordering::Relaxed);
+        //let bt = Backtrace::new();
+        //let caller = bt.frames()[1].symbols()[0].name();
+        //println!("header {:p} had {} refs, increment, caller: {:?}", header, refs, caller);
         assert_ne!(refs, i16::max_value());
     }
 
@@ -292,6 +296,9 @@ where
     #[track_caller]
     fn decrement_references(header: &mut Header) -> i16 {
         let refs = header.references.fetch_sub(1, Ordering::Relaxed);
+        //let bt = Backtrace::new();
+        //let caller = bt.frames()[1].symbols()[0].name();
+        //println!("header {:p} had {} refs, decrement, caller {:?}", header, refs, caller);
         assert_ne!(refs, 0);
         refs - 1
     }
