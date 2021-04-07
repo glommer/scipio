@@ -262,8 +262,6 @@ where
             (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
-                Self::increment_references(&mut *(raw.header as *mut Header));
-
                 // Schedule the task. There is no need to call `Self::schedule(ptr)`
                 // because the schedule function cannot be destroyed while the waker is
                 // still alive.
@@ -368,23 +366,11 @@ where
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
-        let guard;
-        // Calling of schedule functions itself does not increment references,
-        // if the schedule function has captured variables, increment references
-        // so if task being dropped inside schedule function , function itself
-        // will keep valid data till the end of execution.
-        if mem::size_of::<S>() > 0 {
-            guard = Some(Waker::from_raw(Self::clone_waker(ptr)));
-        } else {
-            guard = None;
-        }
-
         let task = Task {
             raw_task: NonNull::new_unchecked(ptr as *mut ()),
         };
 
         (*raw.schedule)(task);
-        drop(guard);
     }
 
     /// Drops the future inside a task.
