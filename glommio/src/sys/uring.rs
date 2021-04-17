@@ -1117,8 +1117,8 @@ impl Reactor {
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(128, "main", allocator.clone())?;
-        let poll_ring = PollRing::new(128, allocator.clone())?;
+        let mut main_ring = SleepableRing::new(512, "main", allocator.clone())?;
+        let poll_ring = PollRing::new(512, allocator.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1139,7 +1139,7 @@ impl Reactor {
             },
         }
 
-        let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
+        let latency_ring = SleepableRing::new(512, "latency", allocator.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
