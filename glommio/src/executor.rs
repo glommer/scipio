@@ -44,6 +44,8 @@ use std::{
 use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
+use log::warn;
+
 use crate::{
     multitask,
     parking,
@@ -1276,6 +1278,10 @@ impl LocalExecutor {
 
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
+                    if runtime > Duration::from_millis(5) {
+                        warn!("Reactor stall! : {} {:?}", &state.name, runtime);
+                    }
+
                     let last_vruntime = state.account_vruntime(runtime);
                     (state.is_active(), last_vruntime)
                 };
