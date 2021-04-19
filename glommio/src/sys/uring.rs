@@ -1095,10 +1095,7 @@ fn align_up(v: usize, align: usize) -> usize {
 }
 
 impl Reactor {
-    pub(crate) fn new(
-        notifier: Arc<sys::SleepNotifier>,
-        mut io_memory: usize,
-    ) -> io::Result<Reactor> {
+    pub(crate) fn new(config: sys::ReactorConfig) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
@@ -1111,14 +1108,17 @@ impl Reactor {
             ));
         }
 
+        let notifier = config.notifier.clone();
+
         // always have at least some small amount of memory for the slab
-        io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
+        let io_memory = std::cmp::max(align_up(config.io_memory, 4096), 65536);
 
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(512, "main", allocator.clone())?;
-        let poll_ring = PollRing::new(512, allocator.clone())?;
+        let mut main_ring =
+            SleepableRing::new(config.main_ring_entries, "main", allocator.clone())?;
+        let poll_ring = PollRing::new(config.poll_ring_entries, allocator.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1139,7 +1139,8 @@ impl Reactor {
             },
         }
 
-        let latency_ring = SleepableRing::new(512, "latency", allocator.clone())?;
+        let latency_ring =
+            SleepableRing::new(config.latency_ring_entries, "latency", allocator.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(

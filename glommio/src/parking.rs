@@ -38,10 +38,7 @@ use std::{
     panic::{self, RefUnwindSafe, UnwindSafe},
     path::Path,
     rc::Rc,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU32, Ordering},
     task::{Poll, Waker},
     time::{Duration, Instant},
 };
@@ -50,11 +47,13 @@ use futures_lite::*;
 
 use crate::{
     sys,
-    sys::{DirectIo, DmaBuffer, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType},
+    sys::{DirectIo, DmaBuffer, IoBuffer, PollableStatus, Source, SourceType},
     IoRequirements,
     Latency,
     Local,
 };
+
+pub(crate) use sys::ReactorConfig;
 
 /// Waits for a notification.
 pub(crate) struct Parker {
@@ -267,9 +266,8 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize) -> Reactor {
-        let sys = sys::Reactor::new(notifier, io_memory)
-            .expect("cannot initialize I/O event notification");
+    pub(crate) fn new(config: ReactorConfig) -> Reactor {
+        let sys = sys::Reactor::new(config).expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,

@@ -225,6 +225,14 @@ use crate::{
     IoRequirements,
 };
 
+pub(crate) struct ReactorConfig {
+    pub(crate) io_memory: usize,
+    pub(crate) main_ring_entries: usize,
+    pub(crate) latency_ring_entries: usize,
+    pub(crate) poll_ring_entries: usize,
+    pub(crate) notifier: Arc<SleepNotifier>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
     idgen: usize,

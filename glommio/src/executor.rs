@@ -36,7 +36,6 @@ use std::{
     io,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
     task::{Context, Poll},
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -407,6 +406,53 @@ pub struct LocalExecutorBuilder {
     /// that but it will come from the standard allocator and performance
     /// will suffer. Defaults to 10MB.
     io_memory: usize,
+
+    /// The number of entries in each of the io_uring's main ring. The main ring
+    /// is where all requests go if nothing special about them is specified.
+    /// It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    io_uring_main_ring_entries: usize,
+
+    /// The number of entries in each of the io_uring's latency ring. The
+    /// latency ring is where timer requests go, and also most requests from
+    /// tasks from [`task queues`] created with the [`Latency::Matters`]
+    /// specifier. It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    ///
+    /// Decreasing this number decreases the amount of locked memory the kernel
+    /// uses.
+    io_uring_latency_ring_entries: usize,
+
+    /// The number of entries in each of the io_uring's poll ring. The poll ring
+    /// is where NVMe requests go. If you are not posting requests to an
+    /// NVMe device, you can set this to 0 to disable the poll ring.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of memory the kernel uses
+    /// and you may have to increase your memlock limit.
+    io_uring_poll_ring_entries: usize,
+
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
 }
@@ -421,6 +467,9 @@ impl LocalExecutorBuilder {
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
+            io_uring_main_ring_entries: 128,
+            io_uring_latency_ring_entries: 128,
+            io_uring_poll_ring_entries: 128,
         }
     }
 
@@ -474,6 +523,61 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// The number of entries in each of the io_uring's main ring. The main ring
+    /// is where all requests go if nothing special about them is specified.
+    /// It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    pub fn io_uring_main_ring_entries(mut self, entries: usize) -> LocalExecutorBuilder {
+        self.io_uring_main_ring_entries = std::cmp::max(2, entries);
+        self
+    }
+
+    /// The number of entries in each of the io_uring's latency ring. The
+    /// latency ring is where timer requests go, and also most requests from
+    /// tasks from [`task queues`] created with the [`Latency::Matters`]
+    /// specifier. It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    ///
+    /// Decreasing this number decreases the amount of locked memory the kernel
+    /// uses.
+    pub fn io_uring_latency_ring_entries(mut self, entries: usize) -> LocalExecutorBuilder {
+        self.io_uring_latency_ring_entries = std::cmp::max(2, entries);
+        self
+    }
+
+    /// The number of entries in each of the io_uring's poll ring. The poll ring
+    /// is where NVMe requests go. If you are not posting requests to an
+    /// NVMe device, you can set this to 0 to disable the poll ring.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of memory the kernel uses
+    /// and you may have to increase your memlock limit.
+    pub fn io_uring_poll_ring_entries(mut self, entries: usize) -> LocalExecutorBuilder {
+        self.io_uring_poll_ring_entries = entries;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
     /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -485,7 +589,15 @@ impl LocalExecutorBuilder {
     /// ```
     pub fn make(self) -> Result<LocalExecutor> {
         let notifier = sys::new_sleep_notifier()?;
-        let mut le = LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
+        let config = sys::ReactorConfig {
+            notifier,
+            io_memory: self.io_memory,
+            main_ring_entries: self.io_uring_main_ring_entries,
+            latency_ring_entries: self.io_uring_latency_ring_entries,
+            poll_ring_entries: self.io_uring_poll_ring_entries,
+        };
+
+        let mut le = LocalExecutor::new(config, self.preempt_timer_duration);
         if let Some(cpu) = self.binding {
             le.bind_to_cpu_set(Some(cpu))?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -549,8 +661,15 @@ impl LocalExecutorBuilder {
         Builder::new()
             .name(name)
             .spawn(move || {
-                let mut le =
-                    LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
+                let config = sys::ReactorConfig {
+                    notifier,
+                    io_memory: self.io_memory,
+                    main_ring_entries: self.io_uring_main_ring_entries,
+                    latency_ring_entries: self.io_uring_latency_ring_entries,
+                    poll_ring_entries: self.io_uring_poll_ring_entries,
+                };
+
+                let mut le = LocalExecutor::new(config, self.preempt_timer_duration);
                 if let Some(cpu) = self.binding {
                     le.bind_to_cpu_set(Some(cpu)).unwrap();
                     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -658,6 +777,53 @@ pub struct LocalExecutorPoolBuilder {
     io_memory: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
+
+    /// The number of entries in each of the io_uring's main ring. The main ring
+    /// is where all requests go if nothing special about them is specified.
+    /// It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    io_uring_main_ring_entries: usize,
+
+    /// The number of entries in each of the io_uring's latency ring. The
+    /// latency ring is where timer requests go, and also most requests from
+    /// tasks from [`task queues`] created with the [`Latency::Matters`]
+    /// specifier. It cannot be disabled.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of locked memory the kernel
+    /// uses and you may have to increase your memlock limit.
+    ///
+    /// Decreasing this number decreases the amount of locked memory the kernel
+    /// uses.
+    io_uring_latency_ring_entries: usize,
+
+    /// The number of entries in each of the io_uring's poll ring. The poll ring
+    /// is where NVMe requests go. If you are not posting requests to an
+    /// NVMe device, you can set this to 0 to disable the poll ring.
+    ///
+    /// You usually don't worry about this, since the default (128) is enough to
+    /// fill the CPU with work until the next preempt timer fires. But
+    /// specialized applications with either a too high preempt timer or
+    /// lots of very small and fast requests may benefit from raising this
+    /// number.
+    ///
+    /// Increasing this number increases the amount of memory the kernel uses
+    /// and you may have to increase your memlock limit.
+    io_uring_poll_ring_entries: usize,
+
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
     placement: Placement,
 }
@@ -674,6 +840,9 @@ impl LocalExecutorPoolBuilder {
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
+            io_uring_main_ring_entries: 128,
+            io_uring_latency_ring_entries: 128,
+            io_uring_poll_ring_entries: 128,
             placement: Placement::Unbound,
         }
     }
@@ -707,6 +876,30 @@ impl LocalExecutorPoolBuilder {
     /// for details.  The setting is applied to all executors in the pool.
     pub fn preempt_timer(mut self, dur: Duration) -> Self {
         self.preempt_timer_duration = dur;
+        self
+    }
+
+    /// Please see documentation under
+    /// [`LocalExecutorBuilder::io_uring_main_ring_entries`] for details.
+    /// The setting is applied to all executors in the pool.
+    pub fn io_uring_main_ring_entries(mut self, entries: usize) -> Self {
+        self.io_uring_main_ring_entries = std::cmp::max(2, entries);
+        self
+    }
+
+    /// Please see documentation under
+    /// [`LocalExecutorBuilder::io_uring_latency_ring_entries`] for details.
+    /// The setting is applied to all executors in the pool.
+    pub fn io_uring_latency_ring_entries(mut self, entries: usize) -> Self {
+        self.io_uring_latency_ring_entries = std::cmp::max(2, entries);
+        self
+    }
+
+    /// Please see documentation under
+    /// [`LocalExecutorBuilder::io_uring_latency_ring_entries`] for details.
+    /// The setting is applied to all executors in the pool.
+    pub fn io_uring_poll_ring_entries(mut self, entries: usize) -> Self {
+        self.io_uring_poll_ring_entries = entries;
         self
     }
 
@@ -772,14 +965,20 @@ impl LocalExecutorPoolBuilder {
             let handle = Builder::new()
                 .name(name)
                 .spawn({
-                    let io_memory = self.io_memory;
                     let preempt_timer_duration = self.preempt_timer_duration;
                     let spin_before_park = self.spin_before_park;
                     let fut_gen = fut_gen.clone();
 
+                    let config = sys::ReactorConfig {
+                        notifier,
+                        io_memory: self.io_memory,
+                        main_ring_entries: self.io_uring_main_ring_entries,
+                        latency_ring_entries: self.io_uring_latency_ring_entries,
+                        poll_ring_entries: self.io_uring_poll_ring_entries,
+                    };
+
                     move || {
-                        let mut le =
-                            LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
+                        let mut le = LocalExecutor::new(config, preempt_timer_duration);
                         if let CpuSet(Some(set)) = cpu_set {
                             let set = set.into_iter().map(|s| s.cpu);
                             le.bind_to_cpu_set(set).unwrap();
@@ -895,17 +1094,13 @@ impl LocalExecutor {
         );
     }
 
-    fn new(
-        notifier: Arc<sys::SleepNotifier>,
-        io_memory: usize,
-        preempt_timer: Duration,
-    ) -> LocalExecutor {
+    fn new(config: sys::ReactorConfig, preempt_timer: Duration) -> LocalExecutor {
         let p = parking::Parker::new();
         LocalExecutor {
             queues: ExecutorQueues::new(preempt_timer),
             parker: p,
-            id: notifier.id(),
-            reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
+            id: config.notifier.id(),
+            reactor: Rc::new(parking::Reactor::new(config)),
         }
     }
 
