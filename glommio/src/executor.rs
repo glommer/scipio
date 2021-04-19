@@ -1279,7 +1279,10 @@ impl LocalExecutor {
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
                     if runtime > Duration::from_millis(5) {
-                        warn!("Reactor stall! : {} {:?}", &state.name, runtime);
+                        warn!(
+                            "Reactor stall! {} : {} {:?}",
+                            &self.id, &state.name, runtime
+                        );
                     }
 
                     let last_vruntime = state.account_vruntime(runtime);
