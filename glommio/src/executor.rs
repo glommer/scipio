@@ -1358,7 +1358,9 @@ impl LocalExecutor {
                         }
                     }
 
-                    let last_vruntime = state.account_vruntime(runtime);
+
+                    let delta = std::cmp::min(runtime, self.preempt_timer_duration());
+                    let last_vruntime = state.account_vruntime(delta);
                     (state.is_active(), last_vruntime)
                 };
 
