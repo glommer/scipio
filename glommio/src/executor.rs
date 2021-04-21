@@ -1292,6 +1292,19 @@ impl LocalExecutor {
         ran
     }
 
+    fn from_timeval(v: libc::timeval) -> Duration {
+        Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
+    }
+
+    fn getrusage() -> libc::rusage {
+        let mut s0 = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
+        if err != 0 {
+            panic!("getrusage error = {}", err);
+        }
+        unsafe { s0.assume_init() }
+    }
+
     fn run_one_task_queue(&self, backtrace_receiver: &spsc_queue::Consumer<Frame>) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -1318,6 +1331,8 @@ impl LocalExecutor {
                     now
                 };
 
+                let ru = Self::getrusage();
+
                 let mut tasks_executed_this_loop = 0;
                 loop {
                     let mut queue_ref = queue.borrow_mut();
@@ -1335,6 +1350,7 @@ impl LocalExecutor {
                 }
 
                 let runtime = time.elapsed();
+                let ru2 = Self::getrusage();
 
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
@@ -1347,17 +1363,22 @@ impl LocalExecutor {
                     if let Some(dur) = timerfd_duration {
                         self.disarm_timerfd();
                         if runtime > dur {
-
                             let mut bt = backtrace::Backtrace::from(frames);
                             bt.resolve();
                             warn!(
-                                "On executor {}: task queue {} ran for too long: \
-                                 {:#?}\nBacktrace: {:#?}",
-                                &self.id, &state.name, runtime, bt,
+                                "On executor {}: task queue {} ran for too long: {:#?} rusage \
+                                 utime {:#?} rusage stime {:#?}, ctxt: {}/{} \nBacktrace: {:#?}",
+                                &self.id,
+                                &state.name,
+                                runtime,
+                                Self::from_timeval(ru2.ru_utime) - Self::from_timeval(ru.ru_utime),
+                                Self::from_timeval(ru2.ru_stime) - Self::from_timeval(ru.ru_stime),
+                                ru2.ru_nvcsw - ru.ru_nvcsw,
+                                ru2.ru_nivcsw - ru.ru_nivcsw,
+                                bt
                             );
                         }
                     }
-
 
                     let delta = std::cmp::min(runtime, self.preempt_timer_duration());
                     let last_vruntime = state.account_vruntime(delta);
