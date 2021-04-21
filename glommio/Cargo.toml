@@ -35,6 +35,9 @@ ahash = "0.5.7"
 intrusive-collections = "0.9.0"
 lockfree = "0.5"
 membarrier = "0.2.2"
+backtrace = { git = "https://github.com/glommer/backtrace-rs.git", rev = "25726598eb3e52788e2a2c83467b72d6126aedb8" }
+timerfd = "1.2"
+signal-hook = "0.3.8"
 
 [dev-dependencies]
 futures = "0.3.5"
