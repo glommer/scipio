@@ -1273,7 +1273,7 @@ impl LocalExecutor {
     fn arm_timerfd(&self, threshold: Duration) {
         let dur = std::cmp::min(self.preempt_timer_duration() * 2, threshold);
         let mut timerfd = self.timerfd.borrow_mut();
-        timerfd.set_state(TimerState::Oneshot(dur), SetTimeFlags::Default);
+        timerfd.set_state(TimerState::Periodic{current: dur, interval: Duration::from_millis(2) }, SetTimeFlags::Default);
     }
 
     fn disarm_timerfd(&self) {
