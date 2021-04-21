@@ -114,6 +114,12 @@ pub(crate) fn write_eventfd(eventfd: RawFd) {
     assert_eq!(ret, 8);
 }
 
+pub(crate) fn read_timerfd(timerfd: RawFd) {
+    let buf = [1u64; 1];
+    let ret = syscall!(read(timerfd, buf.as_ptr() as _, 8)).unwrap();
+    assert_eq!(ret, 8);
+}
+
 pub(crate) fn send_syscall(fd: RawFd, buf: *const u8, len: usize, flags: i32) -> io::Result<usize> {
     syscall!(send(fd, buf as _, len, flags)).map(|x| x as usize)
 }
