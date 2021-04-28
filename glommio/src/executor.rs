@@ -29,9 +29,15 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+use log::warn;
+use nix::sys::signal::{self, Signal};
+use std::os::unix::io::{AsRawFd, RawFd};
+use timerfd::{SetTimeFlags, TimerFd, TimerState};
+
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{hash_map::Entry, BinaryHeap},
+    fmt,
     future::Future,
     io,
     marker::PhantomData,
@@ -47,6 +53,8 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
+    channels::spsc_queue,
+    enclose,
     multitask,
     parking,
     sys,
@@ -67,6 +75,8 @@ use ahash::AHashMap;
 type Result<T> = crate::Result<T, ()>;
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
+
+use backtrace::Frame;
 
 pub(crate) fn executor_id() -> Option<usize> {
     if LOCAL_EX.is_set() {
@@ -872,12 +882,35 @@ pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
 ///
 /// [`LocalExecutorBuilder::spawn`]:
 /// struct.LocalExecutorBuilder.html#method.spawn
-#[derive(Debug)]
 pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
     id: usize,
     reactor: Rc<parking::Reactor>,
+    stall_threshold: Cell<Option<Duration>>,
+    timerfd: RefCell<TimerFd>,
+    stalls: Arc<StallDetector>,
+}
+
+impl fmt::Debug for LocalExecutor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalExecutor ")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+struct StallDetector {
+    timerfd: RawFd,
+}
+
+impl StallDetector {
+    fn new(fd: &TimerFd) -> Self {
+        Self {
+            timerfd: fd.as_raw_fd(),
+        }
+    }
 }
 
 impl LocalExecutor {
@@ -903,11 +936,15 @@ impl LocalExecutor {
         preempt_timer: Duration,
     ) -> LocalExecutor {
         let p = parking::Parker::new();
+        let timerfd = TimerFd::new().unwrap();
         LocalExecutor {
             queues: ExecutorQueues::new(preempt_timer),
             parker: p,
             id: notifier.id(),
             reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
+            stalls: Arc::new(StallDetector::new(&timerfd)),
+            timerfd: RefCell::new(timerfd),
+            stall_threshold: Cell::new(None),
         }
     }
 
@@ -1032,22 +1069,44 @@ impl LocalExecutor {
         self.reactor.need_preempt()
     }
 
-    fn run_task_queues(&self) -> bool {
+    fn set_stall_threshold(&self, dur: Option<Duration>) -> Option<Duration> {
+        self.stall_threshold.replace(dur)
+    }
+
+    fn arm_timerfd(&self, threshold: Duration) {
+        let dur = std::cmp::max(self.preempt_timer_duration() * 2, threshold);
+        let mut timerfd = self.timerfd.borrow_mut();
+        timerfd.set_state(
+            TimerState::Periodic {
+                current: dur,
+                interval: dur,
+            },
+            SetTimeFlags::Default,
+        );
+    }
+
+    fn disarm_timerfd(&self) {
+        let mut timerfd = self.timerfd.borrow_mut();
+        timerfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
+    }
+
+    fn run_task_queues(&self, backtrace_receiver: &spsc_queue::Consumer<Frame>) -> bool {
         let mut ran = false;
         while !self.need_preempt() {
-            if !self.run_one_task_queue() {
+            ran = self.run_one_task_queue(backtrace_receiver);
+            if !ran {
                 return false;
-            } else {
-                ran = true;
             }
         }
         ran
     }
 
-    fn run_one_task_queue(&self) -> bool {
+    fn run_one_task_queue(&self, backtrace_receiver: &spsc_queue::Consumer<Frame>) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
         tq.stats.scheduler_runs += 1;
+
+        let timerfd_duration = self.stall_threshold.get();
 
         match candidate {
             Some(queue) => {
@@ -1058,6 +1117,11 @@ impl LocalExecutor {
                     let now = Instant::now();
                     let mut queue_ref = queue.borrow_mut();
                     queue_ref.prepare_to_run(now);
+
+                    if let Some(dur) = timerfd_duration.as_ref().cloned() {
+                        self.arm_timerfd(dur);
+                    }
+
                     self.reactor
                         .inform_io_requirements(queue_ref.io_requirements);
                     now
@@ -1080,10 +1144,29 @@ impl LocalExecutor {
                 }
 
                 let runtime = time.elapsed();
+                self.disarm_timerfd();
+
+                let mut frames: Vec<backtrace::BacktraceFrame> = Vec::new();
+                while let Some(frame) = backtrace_receiver.try_pop() {
+                    frames.push(frame.into());
+                }
 
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
-                    let last_vruntime = state.account_vruntime(runtime);
+                    if let Some(dur) = timerfd_duration {
+                        if runtime > dur {
+                            let mut bt = backtrace::Backtrace::from(frames);
+                            bt.resolve();
+                            warn!(
+                                "On executor {}: task queue {} ran for too long: \
+                                 {:#?}\nBacktrace: {:#?}",
+                                &self.id, &state.name, runtime, bt
+                            );
+                        }
+                    }
+
+                    let delta = std::cmp::min(runtime, self.preempt_timer_duration());
+                    let last_vruntime = state.account_vruntime(delta);
                     (state.is_active(), last_vruntime)
                 };
 
@@ -1136,9 +1219,45 @@ impl LocalExecutor {
 
         let spin_before_park = self.spin_before_park().unwrap_or_default();
 
+        let tid = nix::unistd::gettid();
+
+        let (sender, receiver) = spsc_queue::make(1024);
+
+        let _signal = unsafe {
+            signal_hook::low_level::register(
+                signal_hook::consts::SIGUSR1,
+                enclose! { (sender) move || {
+                    backtrace::trace_unsynchronized(|frame| {
+                        let pushed = sender.try_push(frame.clone());
+                        pushed.is_none()
+                    });
+                }},
+            )
+        }
+        .unwrap();
+
+        let handle = std::thread::current();
+        let name = handle
+            .name()
+            .map_or_else(|| format!("glommio-{}", self.id), |x| x.into());
+        let stalls = self.stalls.clone();
+        let sd = Builder::new()
+            .name(format!("{}-stall-detector", name))
+            .spawn(move || {
+                loop {
+                    sys::read_timerfd(stalls.timerfd);
+                    signal::kill(tid, Signal::SIGUSR1).unwrap();
+                }
+            });
+        if let Err(x) = sd {
+            warn!("Could not spawn stall detector {}: {:?}", name, x);
+        }
+
         LOCAL_EX.set(self, || {
             let future = self.spawn(async move { future.await }).detach();
             pin!(future);
+
+            let backtrace_receiver = receiver;
 
             let mut pre_time = Instant::now();
             loop {
@@ -1157,7 +1276,8 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                let run = self.run_task_queues();
+
+                let run = self.run_task_queues(&backtrace_receiver);
                 let cur_time = Instant::now();
                 self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                 pre_time = cur_time;
@@ -1395,6 +1515,10 @@ impl<T> Task<T> {
         T: 'static,
     {
         LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle).map(Self))
+    }
+
+    pub fn set_stall_threshold(dur: Option<Duration>) -> Option<Duration> {
+        LOCAL_EX.with(|local_ex| local_ex.set_stall_threshold(dur))
     }
 
     /// Returns the id of the current executor
@@ -2721,6 +2845,23 @@ mod test {
             Local::later().await;
             do_later.await;
             assert_eq!(a, 2);
+        });
+    }
+
+    #[test]
+    fn executor_stall_detector() {
+        LocalExecutor::default().run(async {
+            let old = Local::set_stall_threshold(Some(Duration::from_millis(200)));
+            sleep(Duration::from_millis(1)).await;
+            assert_eq!(old.is_none(), true);
+            let now = Instant::now();
+            while now.elapsed() < Duration::from_secs(1) {}
+            Local::later().await;
+
+            sleep(Duration::from_millis(1)).await;
+
+            let old = Local::set_stall_threshold(None);
+            assert_eq!(old.unwrap(), Duration::from_millis(200));
         });
     }
 }

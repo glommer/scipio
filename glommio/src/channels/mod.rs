@@ -5,7 +5,7 @@
 //
 //! glommio::channels is a module that provides glommio channel-like
 //! abstractions.
-mod spsc_queue;
+pub(crate) mod spsc_queue;
 
 /// Allow data to be transmitted across two tasks in the same shard.
 ///
