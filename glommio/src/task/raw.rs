@@ -262,14 +262,7 @@ where
             (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
-                // Schedule the task. There is no need to call `Self::schedule(ptr)`
-                // because the schedule function cannot be destroyed while the waker is
-                // still alive.
-                let task = Task {
-                    raw_task: NonNull::new_unchecked(ptr as *mut ()),
-                };
-
-                (*raw.schedule)(task);
+                Self::schedule(ptr);
             }
         }
     }
@@ -327,10 +320,12 @@ where
             if state & (COMPLETED | CLOSED) == 0 {
                 // Because we'll schedule it one last time, bump the reference count.
                 Self::increment_references(&mut *(raw.header as *mut Header));
-                // If the task was not completed nor closed, close it and schedule one more time
-                // so that its future gets dropped by the executor.
+                if state & SCHEDULED == 0 {
+                    // If the task was not completed nor closed, close it and schedule one more time
+                    // so that its future gets dropped by the executor.
+                    Self::schedule(ptr);
+                }
                 (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED;
-                Self::schedule(ptr);
             } else {
                 // Otherwise, destroy the task right away.
                 Self::destroy(ptr);
