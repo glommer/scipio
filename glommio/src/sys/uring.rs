@@ -1150,18 +1150,6 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
     ) -> io::Result<Reactor> {
-        const MIN_MEMLOCK_LIMIT: Rlim = Rlim::from_raw(512 * 1024);
-        let (memlock_limit, _) = Resource::MEMLOCK.get()?;
-        if memlock_limit < MIN_MEMLOCK_LIMIT {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!(
-                    "The memlock resource limit is too low: {} (recommended {})",
-                    memlock_limit, MIN_MEMLOCK_LIMIT
-                ),
-            ));
-        }
-
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
         // always have at least some small amount of memory for the slab
         io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
